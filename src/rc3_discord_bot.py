@@ -1,5 +1,5 @@
 import configparser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 from discord.embeds import Embed
@@ -16,7 +16,7 @@ class DiscordBot(commands.Bot):
     
     config_path: str
     channels: Dict[int, int]
-    messages: Dict[int, Tuple[int, int]]
+    messages: Dict[int, Union [Tuple[Message, Message], Tuple[int, int]]]
     events: List[Any]
     token: str
     schedule_planner: SchedulePlanner
@@ -35,7 +35,7 @@ class DiscordBot(commands.Bot):
         if os.path.isfile(config_path):
             with open(config_path, 'rb') as file:
                 save_dict = pickle.load(file)
-            self.token = save_dict['token']
+            # self.token = save_dict['token']
             self.channels = save_dict['channels']
             self.messages = save_dict['messages']
 
@@ -57,41 +57,44 @@ class DiscordBot(commands.Bot):
         save_dict = {
             "token": self.token,
             "channels": self.channels,
-            "messages": self.messages
+            "messages": {guild_id: (self.messages[guild_id][0].id, self.messages[guild_id][1].id) for guild_id in self.messages}
         }
 
         with open(self.config_path, "wb+") as file:
             pickle.dump(save_dict, file)
 
-
-    async def is_ready(self) -> bool:
-        print("help")
-        return super().is_ready()
-
     def prepare_message(self) -> Tuple[bool, Optional[Tuple[Tuple[str, Optional[Embed]], Tuple[str, Optional[Embed]]]]]:
-        def events_to_embed(events: Dict[str, Any]) -> Optional[Embed]:
+        def events_to_embed(events: Dict[str, Any], title: str,  url: str) -> Optional[Embed]:
             if not events:
                 return None
 
-            return_embed = Embed()
+            return_embed = Embed(url=url, title=title)
             for event in events:
                 description = events[event]["title"]
                 starttime = datetime.fromisoformat(events[event]["date"])
                 duration = datetime.strptime(events[event]["duration"], "%H:%M")
                 duration = timedelta(hours=duration.hour, minutes=duration.minute)
                 endtime = starttime + duration
-                date = "{}-{} ({} min)".format(starttime.strftime("%H:%M"), endtime.strftime("%H:%M"), int(duration.total_seconds()/60))
-                return_embed = return_embed.add_field(name=event, value="\n".join([description, date]), inline=True)
+                current_time = datetime.now(tz=timezone(timedelta(seconds=3600)))
+                if starttime > current_time:
+                    min_text = "in {} min".format(int((starttime - current_time).seconds/60))
+                else:
+                    min_text = "{} min left".format(int((endtime - current_time).seconds/60))
+                date = "{}-{} ({})".format(starttime.strftime("%H:%M"), endtime.strftime("%H:%M"), min_text)
+                link = ""
+                if 'url' in events[event]:
+                    link = events[event]['url']
+                return_embed = return_embed.add_field(name=event, value="\n".join([description, date, link]), inline=True)
             return return_embed
 
         events = self.schedule_planner.current_events()
         if self.events is events:
             return False, None
 
-        current_events = "Current events"
-        nextup_events = "Upcoming events"
-        current_events_embed = events_to_embed(events[0])
-        nextup_events_embed = events_to_embed(events[1])
+        current_events = ""
+        nextup_events = ""
+        current_events_embed = events_to_embed(events[0], "Current events", "https://streaming.media.ccc.de/rc3")
+        nextup_events_embed = events_to_embed(events[1], "Upcoming events", "https://rc3.world/rc3/public_fahrplan")
 
         if not current_events_embed:
             current_events = "There is currently no event ongoing."
@@ -103,29 +106,36 @@ class DiscordBot(commands.Bot):
 
         return True, ((current_events, current_events_embed), (nextup_events, nextup_events_embed))
 
-    @tasks.loop(seconds=1)
+    @tasks.loop(minutes=1)
     async def printer(self):
         removed_channels = []
 
         result, events = self.prepare_message()
 
-
         if not result:
             return
 
-        for element in self.messages:
+        for guild_id in self.messages:
             try:
-                guild = self.get_guild(element)
+                guild = self.get_guild(guild_id)
                 if not guild:
                     return
-                channel = guild.get_channel(self.channels[element])
 
-                current_message = await channel.fetch_message(self.messages[element][0])
-                upcoming_message = await channel.fetch_message(self.messages[element][1])
-                await current_message.edit(content=events[0][0], embed=events[0][1])
-                await upcoming_message.edit(content=events[1][0], embed=events[1][1])
+                if type(self.messages[guild_id][0]) is Message:
+                    current_message = self.messages[guild_id][0]
+                    upcoming_message = self.messages[guild_id][1]
+                else:
+                    channel = guild.get_channel(self.channels[guild_id])
+
+                    current_message = await channel.fetch_message(self.messages[guild_id][0])
+                    upcoming_message = await channel.fetch_message(self.messages[guild_id][1])
+
+                    self.messages[guild_id] = (current_message, upcoming_message)
+
+                await self.messages[guild_id][0].edit(content=events[0][0], embed=events[0][1])
+                await self.messages[guild_id][1].edit(content=events[1][0], embed=events[1][1])
             except NotFound:
-                removed_channels.append(element)
+                removed_channels.append(guild_id)
 
         for item in removed_channels:
             self.channels.pop(item)
@@ -151,8 +161,7 @@ class DiscordBot(commands.Bot):
         await ctx.channel.purge()
         
         current, upcoming = (await ctx.channel.send(content="Current Placeholder"), await ctx.channel.send(content="Nextup Placeholder"))
-        ctx.bot.messages[ctx.guild.id] = current.id, upcoming.id
-
-        test = ctx.bot.get_guild(ctx.guild.id)
+        ctx.bot.messages[ctx.guild.id] = current, upcoming
 
         ctx.bot.save_config()
+        ctx.bot.printer.restart()

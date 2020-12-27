@@ -19,7 +19,10 @@ class SchedulePlanner:
             self.data = data["schedule"]
         pass
 
-    def current_events(self, date: datetime = datetime.now(tz=timezone(timedelta(seconds=3600)))):
+    def current_events(self, date: datetime = None):
+        if not date:
+            date = datetime.now(tz=timezone(timedelta(seconds=3600)))
+
         first_day = 27
 
         current_events = {}

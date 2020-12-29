@@ -64,7 +64,7 @@ class DiscordBot(commands.Bot):
             pickle.dump(save_dict, file)
 
     def prepare_message(self) -> Tuple[bool, Optional[Tuple[Tuple[str, Optional[Embed]], Tuple[str, Optional[Embed]]]]]:
-        def events_to_embed(events: Dict[str, Any], title: str,  url: str) -> Optional[Embed]:
+        def events_to_embed(events: Dict[str, Any], title: str,  url: str, image_url: str) -> Optional[Embed]:
             if not events:
                 return None
 
@@ -85,6 +85,8 @@ class DiscordBot(commands.Bot):
                 if 'url' in events[event]:
                     link = events[event]['url']
                 return_embed = return_embed.add_field(name=event, value="\n".join([description, date, link]), inline=True)
+                return_embed.set_footer(text="Updated at {}".format(current_time.strftime("%H:%M:%S")))
+                return_embed.set_thumbnail(url=image_url)
             return return_embed
 
         events = self.schedule_planner.current_events()
@@ -93,8 +95,8 @@ class DiscordBot(commands.Bot):
 
         current_events = ""
         nextup_events = ""
-        current_events_embed = events_to_embed(events[0], "Current events", "https://streaming.media.ccc.de/rc3")
-        nextup_events_embed = events_to_embed(events[1], "Upcoming events", "https://rc3.world/rc3/public_fahrplan")
+        current_events_embed = events_to_embed(events=events[0], title="Current events", url="https://streaming.media.ccc.de/rc3", image_url="https://fgi.cloud/apps/files_sharing/publicpreview/34QfQ5nzj8QxByE?x=2498&y=988&a=true&file=NOW.png")
+        nextup_events_embed = events_to_embed(events=events[1], title="Upcoming events", url="https://rc3.world/rc3/public_fahrplan", image_url="https://fgi.cloud/apps/files_sharing/publicpreview/mgS9frA2LWcPYMY?x=2498&y=988&a=true&file=SOON.png")
 
         if not current_events_embed:
             current_events = "There is currently no event ongoing."
